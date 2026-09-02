@@ -3,6 +3,8 @@ package com.tomtom.intervention
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
@@ -45,10 +47,33 @@ class MainActivity: FlutterActivity() {
             if (call.method == "forceMaxVolume") {
                 try {
                     val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                    // Définit le volume du flux Multimédia (STREAM_MUSIC) au maximum
-                    val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
-                    result.success(true)
+
+// Volume multimédia au maximum
+val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
+
+// Demande le focus audio comme une instruction de navigation.
+// Android Auto doit alors traiter Intervention comme une annonce
+// de navigation et atténuer temporairement la musique.
+if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+
+    val audioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    val focusRequest = AudioFocusRequest.Builder(
+        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+    )
+        .setAudioAttributes(audioAttributes)
+        .setAcceptsDelayedFocusGain(false)
+        .setWillPauseWhenDucked(false)
+        .build()
+
+    audioManager.requestAudioFocus(focusRequest)
+}
+
+result.success(true)
                 } catch (e: Exception) {
                     result.error("VOL_ERR", "Impossible de monter le volume", e.message)
                 }
