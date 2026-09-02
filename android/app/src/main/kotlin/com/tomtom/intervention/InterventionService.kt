@@ -78,42 +78,119 @@ class InterventionService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        val selectedApps = prefs.getString("flutter.selected_packages", "") ?: ""
-        val pkg = sbn.packageName
 
-        if (selectedApps.contains(pkg)) {
-            val extras = sbn.notification.extras
-            val titre = extras.getString("android.title") ?: ""
-            val texte = extras.getString("android.text") ?: ""
-            val messageComplet = "$titre $texte"
+    val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+    val selectedAppsString = prefs.getString("flutter.selected_packages", "") ?: ""
 
-            // Réveil écran
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            val wakeLock = pm.newWakeLock(PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "Intervention::Alert")
-            wakeLock.acquire(5000)
+    val pkg = sbn.packageName
 
-            val intent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra("notification_msg", messageComplet)
-            }
-            startActivity(intent)
+    // selected_packages est enregistré par Flutter sous forme
+    // d'une chaîne de packages séparés par des virgules.
+    // On transforme donc cette chaîne en véritable liste.
+    val selectedApps = selectedAppsString
+        .split(",")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
 
-            if (pkg == "com.systel.mystartplus" || pkg == "bio.aum.opsready.nexsis") {
-                try {
-                    Thread.sleep(1500) 
-                    val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
-                    launchIntent?.let {
-                        it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        startActivity(it)
-                    }
-                } catch (e: Exception) {}
+    if (!selectedApps.contains(pkg)) {
+        return
+    }
 
-                if (pkg == "bio.aum.opsready.nexsis") {
-                    launchOrbe()
+    val notification = sbn.notification
+    val extras = notification.extras
+
+    // ---------------------------------------------------------
+    // IGNORER LES NOTIFICATIONS TECHNIQUES / PERSISTANTES
+    // ---------------------------------------------------------
+    //
+    // Certaines applications surveillées génèrent régulièrement
+    // des notifications de fonctionnement :
+    // - service actif
+    // - notification persistante
+    // - service au premier plan
+    // - résumé de groupe
+    //
+    // Elles ne doivent jamais provoquer l'ouverture d'Intervention.
+    //
+
+    if (sbn.isOngoing) {
+        return
+    }
+
+    if ((notification.flags and android.app.Notification.FLAG_FOREGROUND_SERVICE) != 0) {
+        return
+    }
+
+    if ((notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0) {
+        return
+    }
+
+    val titre = extras.getString("android.title")?.trim() ?: ""
+    val texte = extras.getString("android.text")?.trim() ?: ""
+
+    // Une notification sans véritable contenu n'est pas une alerte.
+    if (titre.isEmpty() && texte.isEmpty()) {
+        return
+    }
+
+    val messageComplet = "$titre $texte".trim()
+
+    // ---------------------------------------------------------
+    // NOTIFICATION À TRAITER
+    // ---------------------------------------------------------
+
+    // Réveil écran
+    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+    val wakeLock = pm.newWakeLock(
+        PowerManager.FULL_WAKE_LOCK or
+                PowerManager.ACQUIRE_CAUSES_WAKEUP,
+        "Intervention::Alert"
+    )
+
+    wakeLock.acquire(5000)
+
+    try {
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra("notification_msg", messageComplet)
+        }
+
+        startActivity(intent)
+
+        // MYSTART+ et NEXSIS :
+        // on conserve exactement le fonctionnement actuel.
+        if (pkg == "com.systel.mystartplus" ||
+            pkg == "bio.aum.opsready.nexsis"
+        ) {
+
+            try {
+                Thread.sleep(1500)
+
+                val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+
+                launchIntent?.let {
+                    it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(it)
                 }
+
+            } catch (e: Exception) {
+                // Ne jamais bloquer l'alerte principale.
             }
-            if (wakeLock.isHeld) wakeLock.release()
+
+            // NEXSIS → lancement d'Orbe Viewer
+            if (pkg == "bio.aum.opsready.nexsis") {
+                launchOrbe()
+            }
+        }
+
+    } finally {
+
+        if (wakeLock.isHeld) {
+            wakeLock.release()
         }
     }
 }
