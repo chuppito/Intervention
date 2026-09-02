@@ -1,0 +1,61 @@
+name: intervention
+description: "Application de surveillance des alertes départ secours."
+
+# Empêche la publication accidentelle sur pub.dev
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Icônes de base
+  cupertino_icons: ^1.0.6
+
+  # Pour la synthèse vocale (TTS)
+  flutter_tts: ^4.2.2
+
+  # Pour jouer les fichiers ogg (gare et bruissement)
+  audioplayers: ^6.1.0
+
+  # Pour sauvegarder les règles et apps sélectionnées
+  shared_preferences: ^2.3.5
+
+  # Pour lister et lancer les applications (MyStart+, Nexsis)
+  installed_apps: ^1.4.1
+
+  external_app_launcher: ^4.0.3
+
+  # Pour parcourir les documents et choisir un son personnalisé
+  file_picker: ^8.1.2
+
+  # Pour copier le son choisi dans un dossier stable de l'app
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: "^0.14.4"
+
+flutter:
+  uses-material-design: true
+
+  # Déclaration des fichiers audio
+  assets:
+    - assets/audio/gare.ogg
+    - assets/audio/bruissement.ogg
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/icon.png
+  adaptive_icon_foreground: assets/adaptive_icon_foreground.png
+  adaptive_icon_background: assets/adaptive_icon_background.png
+  adaptive_icon_foreground_inset: 16
+  min_sdk_android: 21
+  
