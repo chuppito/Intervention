@@ -12,7 +12,8 @@ import androidx.core.app.NotificationCompat
 
 class InterventionService : NotificationListenerService() {
 
-    private val channelId = "intervention_service"
+    // Nouveau canal pour que Android ne réutilise pas l'ancien canal HIGH.
+    private val channelId = "intervention_service_silent"
 
     // Notifications déjà traitées.
     // Cela évite qu'une même notification soit retraitée à chaque
@@ -48,7 +49,7 @@ class InterventionService : NotificationListenerService() {
             val chan = NotificationChannel(
                 channelId,
                 "Intervention Active",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_LOW
             )
 
             val manager =
@@ -65,7 +66,7 @@ class InterventionService : NotificationListenerService() {
             .setContentText("En écoute des applications surveillées")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
         startForeground(1, notification)
@@ -161,7 +162,6 @@ class InterventionService : NotificationListenerService() {
         // lorsqu'une application met simplement à jour son contenu.
         //
         // On utilise la clé Android de la notification.
-        // Ainsi :
         //
         // première apparition -> traitée
         // mise à jour          -> ignorée
@@ -276,13 +276,6 @@ class InterventionService : NotificationListenerService() {
     // ---------------------------------------------------------
     // NOTIFICATION SUPPRIMÉE
     // ---------------------------------------------------------
-    //
-    // Lorsque l'application source supprime réellement la
-    // notification, on retire sa clé.
-    //
-    // Si une nouvelle notification apparaît ensuite avec cette
-    // même clé, elle pourra donc être traitée à nouveau.
-    //
 
     override fun onNotificationRemoved(
         sbn: StatusBarNotification
