@@ -65,9 +65,10 @@ class _InterventionPageState extends State<InterventionPage> {
   }
 
   void _initTTS() async {
-    await _tts.setLanguage("fr-FR");
-    await _tts.setSpeechRate(0.5); 
-    await _tts.setVolume(1.0); 
+  await _tts.setLanguage("fr-FR");
+  await _tts.setSpeechRate(0.5);
+  await _tts.setVolume(1.0);
+  await _tts.setAudioAttributesForNavigation();
   }
 
   // Force le lecteur audio à se comporter comme les instructions vocales de
@@ -81,7 +82,7 @@ class _InterventionPageState extends State<InterventionPage> {
         stayAwake: true,
         contentType: AndroidContentType.speech,
         usageType: AndroidUsageType.assistanceNavigationGuidance,
-        audioFocus: AndroidAudioFocus.gain,
+        audioFocus: AndroidAudioFocus.gainTransientMayDuck,
       ),
     ));
   }
@@ -235,7 +236,7 @@ class _InterventionPageState extends State<InterventionPage> {
       } else {
         _addLog("Lecture par défaut : $message");
         await platform.invokeMethod('forceMaxVolume');
-        await _tts.speak(message);
+        await _tts.speak(message, focus: true);
       }
     }
   }
@@ -271,7 +272,7 @@ class _InterventionPageState extends State<InterventionPage> {
     
     if (text.isNotEmpty) {
       await Future.delayed(const Duration(milliseconds: 500));
-      await _tts.speak(text);
+      await _tts.speak(text, focus: true);
       await Future.delayed(const Duration(seconds: 2));
     }
 
