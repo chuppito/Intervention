@@ -12,12 +12,9 @@ import androidx.core.app.NotificationCompat
 
 class InterventionService : NotificationListenerService() {
 
-    // Nouveau canal pour que Android ne réutilise pas l'ancien canal HIGH.
     private val channelId = "intervention_service_silent"
 
     // Notifications déjà traitées.
-    // Cela évite qu'une même notification soit retraitée à chaque
-    // mise à jour de son contenu par l'application source.
     private val processedNotifications = mutableSetOf<String>()
 
     override fun onListenerConnected() {
@@ -100,7 +97,7 @@ class InterventionService : NotificationListenerService() {
 
             startActivity(intent)
 
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Orbe Viewer probablement pas installé.
         }
     }
@@ -112,7 +109,6 @@ class InterventionService : NotificationListenerService() {
     override fun onNotificationPosted(
         sbn: StatusBarNotification
     ) {
-
         val prefs = getSharedPreferences(
             "FlutterSharedPreferences",
             Context.MODE_PRIVATE
@@ -125,13 +121,11 @@ class InterventionService : NotificationListenerService() {
 
         val pkg = sbn.packageName
 
-        // Liste dynamique des applications sélectionnées dans Intervention.
         val selectedApps = selectedAppsString
             .split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        // Cette application n'est pas surveillée.
         if (!selectedApps.contains(pkg)) {
             return
         }
@@ -149,7 +143,6 @@ class InterventionService : NotificationListenerService() {
             ?.trim()
             ?: ""
 
-        // Pas de contenu exploitable.
         if (titre.isEmpty() && texte.isEmpty()) {
             return
         }
@@ -157,20 +150,6 @@ class InterventionService : NotificationListenerService() {
         // -----------------------------------------------------
         // DÉDUPLICATION
         // -----------------------------------------------------
-        //
-        // Une même notification peut être "postée" plusieurs fois
-        // lorsqu'une application met simplement à jour son contenu.
-        //
-        // On utilise la clé Android de la notification.
-        //
-        // première apparition -> traitée
-        // mise à jour          -> ignorée
-        // nouvelle notification -> traitée
-        //
-        // IMPORTANT :
-        // On ne filtre PAS isOngoing.
-        // Une vraie alerte peut parfaitement être ongoing.
-        //
 
         val notificationKey = sbn.key
 
@@ -180,10 +159,8 @@ class InterventionService : NotificationListenerService() {
 
         processedNotifications.add(notificationKey)
 
-        // Évite que la liste grossisse indéfiniment.
         if (processedNotifications.size > 200) {
             val iterator = processedNotifications.iterator()
-
             if (iterator.hasNext()) {
                 iterator.next()
                 iterator.remove()
@@ -202,35 +179,57 @@ class InterventionService : NotificationListenerService() {
 
         val wakeLock = pm.newWakeLock(
             PowerManager.FULL_WAKE_LOCK or
-                    PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "Intervention::Alert"
         )
 
         wakeLock.acquire(5000)
 
         try {
-
             // -------------------------------------------------
-            // ENVOI À INTERVENTION
+            // INTERVENTION
             // -------------------------------------------------
+            //
+            // Si MainActivity est déjà chargée, on lui transmet
+            // directement l'alerte : aucune ouverture de l'UI.
+            //
+            // Si elle n'est pas chargée, on la crée en mode
+            // invisible. Elle reste donc en arrière-plan.
+            //
+            // Dans les deux cas, le traitement Flutter continue
+            // normalement (son, TTS, règles, etc.).
+            //
 
-            val intent = Intent(
-                this,
-                MainActivity::class.java
-            ).apply {
-
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+            val delivered =
+                MainActivity.dispatchNotification(
+                    messageComplet,
+                    pkg
                 )
 
-                putExtra(
-                    "notification_msg",
-                    messageComplet
-                )
+            if (!delivered) {
+                val intent = Intent(
+                    this,
+                    MainActivity::class.java
+                ).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    )
+
+                    putExtra(
+                        "notification_msg",
+                        messageComplet
+                    )
+
+                    putExtra(
+                        "notification_package",
+                        pkg
+                    )
+                }
+
+                startActivity(intent)
             }
-
-            startActivity(intent)
 
             // -------------------------------------------------
             // MYSTART+ / NEXSIS
@@ -239,9 +238,7 @@ class InterventionService : NotificationListenerService() {
             if (pkg == "com.systel.mystartplus" ||
                 pkg == "bio.aum.opsready.nexsis"
             ) {
-
                 try {
-
                     Thread.sleep(1500)
 
                     val launchIntent =
@@ -255,7 +252,7 @@ class InterventionService : NotificationListenerService() {
                         startActivity(it)
                     }
 
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     // Ne jamais bloquer l'alerte principale.
                 }
 
@@ -266,7 +263,6 @@ class InterventionService : NotificationListenerService() {
             }
 
         } finally {
-
             if (wakeLock.isHeld) {
                 wakeLock.release()
             }
@@ -281,7 +277,6 @@ class InterventionService : NotificationListenerService() {
         sbn: StatusBarNotification
     ) {
         super.onNotificationRemoved(sbn)
-
         processedNotifications.remove(sbn.key)
     }
 }
