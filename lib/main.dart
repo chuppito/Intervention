@@ -65,6 +65,10 @@ class _InterventionPageState extends State<InterventionPage> {
 
     // Signale au service Android que le moteur Flutter sans interface
     // est prêt à recevoir les notifications.
+    _signalFlutterReady();
+  }
+
+  Future<void> _signalFlutterReady() async {
     try {
       await platform.invokeMethod('flutterReady');
     } catch (_) {
