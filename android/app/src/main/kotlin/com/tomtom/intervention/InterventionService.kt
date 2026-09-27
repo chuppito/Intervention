@@ -7,15 +7,36 @@ import android.content.Intent
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 
 class InterventionService : NotificationListenerService() {
 
     private val channelId = "intervention_service_silent"
+    private val flutterChannelName = "com.tomtom.intervention/notify"
 
     // Notifications déjà traitées.
     private val processedNotifications = mutableSetOf<String>()
+
+    // Moteur Flutter sans interface graphique.
+    // Il permet de conserver toute la logique existante de main.dart
+    // (règles, sons, TTS, préférences...) sans lancer MainActivity.
+    private var flutterEngine: FlutterEngine? = null
+    private var flutterChannel: MethodChannel? = null
+    private var flutterReady = false
+
+    private val pendingNotifications = ArrayDeque<Pair<String, String>>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun onCreate() {
+        super.onCreate()
+        goForeground()
+        startBackgroundFlutterEngine()
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -67,6 +88,99 @@ class InterventionService : NotificationListenerService() {
             .build()
 
         startForeground(1, notification)
+    }
+
+    // ---------------------------------------------------------
+    // FLUTTER SANS INTERFACE
+    // ---------------------------------------------------------
+
+    private fun startBackgroundFlutterEngine() {
+        if (flutterEngine != null) return
+
+        try {
+            val engine = FlutterEngine(this)
+
+            val channel = MethodChannel(
+                engine.dartExecutor.binaryMessenger,
+                flutterChannelName
+            )
+
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "flutterReady" -> {
+                        flutterReady = true
+                        result.success(true)
+                        flushPendingNotifications()
+                    }
+
+                    else -> result.notImplemented()
+                }
+            }
+
+            flutterEngine = engine
+            flutterChannel = channel
+
+            engine.dartExecutor.executeDartEntrypoint(
+                io.flutter.embedding.engine.dart.DartExecutor.DartEntrypoint.createDefault()
+            )
+
+        } catch (_: Exception) {
+            flutterEngine = null
+            flutterChannel = null
+            flutterReady = false
+        }
+    }
+
+    private fun sendToFlutter(
+        message: String,
+        packageName: String
+    ) {
+        mainHandler.post {
+            if (!flutterReady || flutterChannel == null) {
+                pendingNotifications.addLast(
+                    Pair(message, packageName)
+                )
+                return@post
+            }
+
+            flutterChannel?.invokeMethod(
+                "onNotificationReceived",
+                mapOf(
+                    "message" to message,
+                    "packageName" to packageName
+                )
+            )
+        }
+    }
+
+    private fun flushPendingNotifications() {
+        if (!flutterReady || flutterChannel == null) return
+
+        while (pendingNotifications.isNotEmpty()) {
+            val item = pendingNotifications.removeFirst()
+
+            flutterChannel?.invokeMethod(
+                "onNotificationReceived",
+                mapOf(
+                    "message" to item.first,
+                    "packageName" to item.second
+                )
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        mainHandler.post {
+            flutterChannel?.setMethodCallHandler(null)
+            flutterChannel = null
+            flutterReady = false
+
+            flutterEngine?.destroy()
+            flutterEngine = null
+            pendingNotifications.clear()
+        }
+
+        super.onDestroy()
     }
 
     // ---------------------------------------------------------
@@ -186,50 +300,10 @@ class InterventionService : NotificationListenerService() {
         wakeLock.acquire(5000)
 
         try {
-            // -------------------------------------------------
-            // INTERVENTION
-            // -------------------------------------------------
-            //
-            // Si MainActivity est déjà chargée, on lui transmet
-            // directement l'alerte : aucune ouverture de l'UI.
-            //
-            // Si elle n'est pas chargée, on la crée en mode
-            // invisible. Elle reste donc en arrière-plan.
-            //
-            // Dans les deux cas, le traitement Flutter continue
-            // normalement (son, TTS, règles, etc.).
-            //
-
-            val delivered =
-                MainActivity.dispatchNotification(
-                    messageComplet,
-                    pkg
-                )
-
-            if (!delivered) {
-                val intent = Intent(
-                    this,
-                    MainActivity::class.java
-                ).apply {
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    )
-
-                    putExtra(
-                        "notification_msg",
-                        messageComplet
-                    )
-
-                    putExtra(
-                        "notification_package",
-                        pkg
-                    )
-                }
-
-                startActivity(intent)
-            }
+            // IMPORTANT :
+            // aucune MainActivity n'est lancée ici.
+            // Le traitement se fait dans le moteur Flutter invisible.
+            sendToFlutter(messageComplet, pkg)
 
             // -------------------------------------------------
             // MYSTART+ / NEXSIS
