@@ -53,15 +53,23 @@ class _InterventionPageState extends State<InterventionPage> {
       if (call.method == "onNotificationReceived") {
         final arguments = call.arguments;
         if (arguments is String) {
-          _executeAction(arguments, packageName: "");
+          await _executeAction(arguments, packageName: "");
         } else if (arguments is Map) {
           final String msg = arguments['message'] ?? "";
           final String pkg = arguments['packageName'] ?? "";
-          _executeAction(msg, packageName: pkg);
+          await _executeAction(msg, packageName: pkg);
         }
       }
       return null;
     });
+
+    // Signale au service Android que le moteur Flutter sans interface
+    // est prêt à recevoir les notifications.
+    try {
+      await platform.invokeMethod('flutterReady');
+    } catch (_) {
+      // L'application peut être lancée normalement sans service natif.
+    }
   }
 
   void _initTTS() async {
