@@ -11,7 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(MaterialApp(
     theme: ThemeData.dark().copyWith(
@@ -205,7 +205,7 @@ class _InterventionPageState extends State<InterventionPage> {
   }
 
   // --- LOGIQUE DE TRAITEMENT DES ALERTES ---
-  void _executeAction(String message, {required String packageName}) async {
+  Future<void> _executeAction(String message, {required String packageName}) async {
     final prefs = await SharedPreferences.getInstance();
     final List<String> currentIgnoreList = prefs.getStringList('ignore_words') ?? [];
     
