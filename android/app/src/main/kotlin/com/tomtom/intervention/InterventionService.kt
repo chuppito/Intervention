@@ -113,6 +113,55 @@ class InterventionService : NotificationListenerService() {
                         flushPendingNotifications()
                     }
 
+                    "forceMaxVolume" -> {
+                        try {
+                            val audioManager =
+                                getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+
+                            // Volume multimédia au maximum.
+                            val maxVol =
+                                audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                            audioManager.setStreamVolume(
+                                android.media.AudioManager.STREAM_MUSIC,
+                                maxVol,
+                                0
+                            )
+
+                            // Même comportement que MainActivity :
+                            // focus audio de type navigation pour l'alerte.
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                val audioAttributes =
+                                    android.media.AudioAttributes.Builder()
+                                        .setUsage(
+                                            android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                                        )
+                                        .setContentType(
+                                            android.media.AudioAttributes.CONTENT_TYPE_SPEECH
+                                        )
+                                        .build()
+
+                                val focusRequest =
+                                    android.media.AudioFocusRequest.Builder(
+                                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                                    )
+                                        .setAudioAttributes(audioAttributes)
+                                        .setAcceptsDelayedFocusGain(false)
+                                        .setWillPauseWhenDucked(false)
+                                        .build()
+
+                                audioManager.requestAudioFocus(focusRequest)
+                            }
+
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error(
+                                "VOL_ERR",
+                                "Impossible de monter le volume",
+                                e.message
+                            )
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }
