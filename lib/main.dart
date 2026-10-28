@@ -241,7 +241,18 @@ class _InterventionPageState extends State<InterventionPage> {
     }
   }
 
-  Future<void> _runAlerte(String sound, String text, {required String packageName}) async {
+  Future<void> _alertQueue = Future<void>.value();
+
+  Future<void> _runAlerte(String sound, String text, {required String packageName}) {
+    final next = _alertQueue.catchError((Object _) {}).then((_) =>
+        _runAlerteSequential(sound, text, packageName: packageName));
+    _alertQueue = next.catchError((Object error) {
+      _addLog("Erreur pendant l'alerte : $error");
+    });
+    return next;
+  }
+
+  Future<void> _runAlerteSequential(String sound, String text, {required String packageName}) async {
     await platform.invokeMethod('forceMaxVolume');
     await _configureAudioForCar();
     
@@ -252,28 +263,29 @@ class _InterventionPageState extends State<InterventionPage> {
           : DeviceFileSource('${(await _soundsDir()).path}/$sound');
       await _audio.play(source);
 
-      // On évite _audio.onPlayerComplete (bug connu du package audioplayers :
-      // il déclenche en interne un .timeout() mal typé qui plante et coupait
-      // l'attente court-circuit, provoquant le chevauchement des sons).
-      // On attend simplement la durée réelle du fichier à la place.
-      Duration? duration;
+      // La durée peut être indisponible immédiatement après play().
+      // La fin réelle du lecteur évite de démarrer la voix trop tôt.
       try {
-        duration = await _audio.getDuration();
+        await _audio.onPlayerComplete.first.timeout(
+          const Duration(seconds: 20),
+        );
       } catch (e) {
-        _addLog("Impossible de lire la durée du son '$sound' : $e");
-      }
-      if (duration != null && duration > Duration.zero) {
-        await Future.delayed(duration);
-      } else {
-        // Sécurité si la durée n'a pas pu être déterminée.
-        await Future.delayed(const Duration(seconds: 3));
+        _addLog("Fin du son non confirmée ($sound) : $e");
+        await _audio.stop();
       }
     }
     
     if (text.isNotEmpty) {
       await Future.delayed(const Duration(milliseconds: 500));
-      await _tts.speak(text, focus: true);
-      await Future.delayed(const Duration(seconds: 2));
+      try {
+        await _tts.awaitSpeakCompletion(true);
+        final result = await _tts.speak(text, focus: true).timeout(
+          const Duration(seconds: 20),
+        );
+        _addLog("Annonce vocale terminée : $text (résultat : $result)");
+      } catch (e) {
+        _addLog("Erreur de synthèse vocale pour '$text' : $e");
+      }
     }
 
     if (packageName.isNotEmpty && _monitoredApps.containsKey(packageName)) {
