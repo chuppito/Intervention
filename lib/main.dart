@@ -11,7 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(MaterialApp(
     theme: ThemeData.dark().copyWith(
@@ -53,15 +53,27 @@ class _InterventionPageState extends State<InterventionPage> {
       if (call.method == "onNotificationReceived") {
         final arguments = call.arguments;
         if (arguments is String) {
-          _executeAction(arguments, packageName: "");
+          await _executeAction(arguments, packageName: "");
         } else if (arguments is Map) {
           final String msg = arguments['message'] ?? "";
           final String pkg = arguments['packageName'] ?? "";
-          _executeAction(msg, packageName: pkg);
+          await _executeAction(msg, packageName: pkg);
         }
       }
       return null;
     });
+
+    // Signale au service Android que le moteur Flutter sans interface
+    // est prêt à recevoir les notifications.
+    _signalFlutterReady();
+  }
+
+  Future<void> _signalFlutterReady() async {
+    try {
+      await platform.invokeMethod('flutterReady');
+    } catch (_) {
+      // L'application peut être lancée normalement sans service natif.
+    }
   }
 
   void _initTTS() async {
@@ -197,7 +209,7 @@ class _InterventionPageState extends State<InterventionPage> {
   }
 
   // --- LOGIQUE DE TRAITEMENT DES ALERTES ---
-  void _executeAction(String message, {required String packageName}) async {
+  Future<void> _executeAction(String message, {required String packageName}) async {
     final prefs = await SharedPreferences.getInstance();
     final List<String> currentIgnoreList = prefs.getStringList('ignore_words') ?? [];
     

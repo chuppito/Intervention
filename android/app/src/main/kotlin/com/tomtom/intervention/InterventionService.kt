@@ -7,18 +7,36 @@ import android.content.Intent
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 
 class InterventionService : NotificationListenerService() {
 
-    // Nouveau canal pour que Android ne réutilise pas l'ancien canal HIGH.
     private val channelId = "intervention_service_silent"
+    private val flutterChannelName = "com.tomtom.intervention/notify"
 
     // Notifications déjà traitées.
-    // Cela évite qu'une même notification soit retraitée à chaque
-    // mise à jour de son contenu par l'application source.
     private val processedNotifications = mutableSetOf<String>()
+
+    // Moteur Flutter sans interface graphique.
+    // Il permet de conserver toute la logique existante de main.dart
+    // (règles, sons, TTS, préférences...) sans lancer MainActivity.
+    private var flutterEngine: FlutterEngine? = null
+    private var flutterChannel: MethodChannel? = null
+    private var flutterReady = false
+
+    private val pendingNotifications = ArrayDeque<Pair<String, String>>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun onCreate() {
+        super.onCreate()
+        goForeground()
+        startBackgroundFlutterEngine()
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -73,6 +91,148 @@ class InterventionService : NotificationListenerService() {
     }
 
     // ---------------------------------------------------------
+    // FLUTTER SANS INTERFACE
+    // ---------------------------------------------------------
+
+    private fun startBackgroundFlutterEngine() {
+        if (flutterEngine != null) return
+
+        try {
+            val engine = FlutterEngine(this)
+
+            val channel = MethodChannel(
+                engine.dartExecutor.binaryMessenger,
+                flutterChannelName
+            )
+
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "flutterReady" -> {
+                        flutterReady = true
+                        result.success(true)
+                        flushPendingNotifications()
+                    }
+
+                    "forceMaxVolume" -> {
+                        try {
+                            val audioManager =
+                                getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+
+                            // Volume multimédia au maximum.
+                            val maxVol =
+                                audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                            audioManager.setStreamVolume(
+                                android.media.AudioManager.STREAM_MUSIC,
+                                maxVol,
+                                0
+                            )
+
+                            // Même comportement que MainActivity :
+                            // focus audio de type navigation pour l'alerte.
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                val audioAttributes =
+                                    android.media.AudioAttributes.Builder()
+                                        .setUsage(
+                                            android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                                        )
+                                        .setContentType(
+                                            android.media.AudioAttributes.CONTENT_TYPE_SPEECH
+                                        )
+                                        .build()
+
+                                val focusRequest =
+                                    android.media.AudioFocusRequest.Builder(
+                                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                                    )
+                                        .setAudioAttributes(audioAttributes)
+                                        .setAcceptsDelayedFocusGain(false)
+                                        .setWillPauseWhenDucked(false)
+                                        .build()
+
+                                audioManager.requestAudioFocus(focusRequest)
+                            }
+
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error(
+                                "VOL_ERR",
+                                "Impossible de monter le volume",
+                                e.message
+                            )
+                        }
+                    }
+
+                    else -> result.notImplemented()
+                }
+            }
+
+            flutterEngine = engine
+            flutterChannel = channel
+
+            engine.dartExecutor.executeDartEntrypoint(
+                io.flutter.embedding.engine.dart.DartExecutor.DartEntrypoint.createDefault()
+            )
+
+        } catch (_: Exception) {
+            flutterEngine = null
+            flutterChannel = null
+            flutterReady = false
+        }
+    }
+
+    private fun sendToFlutter(
+        message: String,
+        packageName: String
+    ) {
+        mainHandler.post {
+            if (!flutterReady || flutterChannel == null) {
+                pendingNotifications.addLast(
+                    Pair(message, packageName)
+                )
+                return@post
+            }
+
+            flutterChannel?.invokeMethod(
+                "onNotificationReceived",
+                mapOf(
+                    "message" to message,
+                    "packageName" to packageName
+                )
+            )
+        }
+    }
+
+    private fun flushPendingNotifications() {
+        if (!flutterReady || flutterChannel == null) return
+
+        while (pendingNotifications.isNotEmpty()) {
+            val item = pendingNotifications.removeFirst()
+
+            flutterChannel?.invokeMethod(
+                "onNotificationReceived",
+                mapOf(
+                    "message" to item.first,
+                    "packageName" to item.second
+                )
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        mainHandler.post {
+            flutterChannel?.setMethodCallHandler(null)
+            flutterChannel = null
+            flutterReady = false
+
+            flutterEngine?.destroy()
+            flutterEngine = null
+            pendingNotifications.clear()
+        }
+
+        super.onDestroy()
+    }
+
+    // ---------------------------------------------------------
     // ORBE VIEWER
     // ---------------------------------------------------------
 
@@ -100,7 +260,7 @@ class InterventionService : NotificationListenerService() {
 
             startActivity(intent)
 
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Orbe Viewer probablement pas installé.
         }
     }
@@ -112,7 +272,6 @@ class InterventionService : NotificationListenerService() {
     override fun onNotificationPosted(
         sbn: StatusBarNotification
     ) {
-
         val prefs = getSharedPreferences(
             "FlutterSharedPreferences",
             Context.MODE_PRIVATE
@@ -125,13 +284,11 @@ class InterventionService : NotificationListenerService() {
 
         val pkg = sbn.packageName
 
-        // Liste dynamique des applications sélectionnées dans Intervention.
         val selectedApps = selectedAppsString
             .split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        // Cette application n'est pas surveillée.
         if (!selectedApps.contains(pkg)) {
             return
         }
@@ -149,7 +306,6 @@ class InterventionService : NotificationListenerService() {
             ?.trim()
             ?: ""
 
-        // Pas de contenu exploitable.
         if (titre.isEmpty() && texte.isEmpty()) {
             return
         }
@@ -157,20 +313,6 @@ class InterventionService : NotificationListenerService() {
         // -----------------------------------------------------
         // DÉDUPLICATION
         // -----------------------------------------------------
-        //
-        // Une même notification peut être "postée" plusieurs fois
-        // lorsqu'une application met simplement à jour son contenu.
-        //
-        // On utilise la clé Android de la notification.
-        //
-        // première apparition -> traitée
-        // mise à jour          -> ignorée
-        // nouvelle notification -> traitée
-        //
-        // IMPORTANT :
-        // On ne filtre PAS isOngoing.
-        // Une vraie alerte peut parfaitement être ongoing.
-        //
 
         val notificationKey = sbn.key
 
@@ -180,10 +322,8 @@ class InterventionService : NotificationListenerService() {
 
         processedNotifications.add(notificationKey)
 
-        // Évite que la liste grossisse indéfiniment.
         if (processedNotifications.size > 200) {
             val iterator = processedNotifications.iterator()
-
             if (iterator.hasNext()) {
                 iterator.next()
                 iterator.remove()
@@ -202,35 +342,17 @@ class InterventionService : NotificationListenerService() {
 
         val wakeLock = pm.newWakeLock(
             PowerManager.FULL_WAKE_LOCK or
-                    PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "Intervention::Alert"
         )
 
         wakeLock.acquire(5000)
 
         try {
-
-            // -------------------------------------------------
-            // ENVOI À INTERVENTION
-            // -------------------------------------------------
-
-            val intent = Intent(
-                this,
-                MainActivity::class.java
-            ).apply {
-
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-
-                putExtra(
-                    "notification_msg",
-                    messageComplet
-                )
-            }
-
-            startActivity(intent)
+            // IMPORTANT :
+            // aucune MainActivity n'est lancée ici.
+            // Le traitement se fait dans le moteur Flutter invisible.
+            sendToFlutter(messageComplet, pkg)
 
             // -------------------------------------------------
             // MYSTART+ / NEXSIS
@@ -239,9 +361,7 @@ class InterventionService : NotificationListenerService() {
             if (pkg == "com.systel.mystartplus" ||
                 pkg == "bio.aum.opsready.nexsis"
             ) {
-
                 try {
-
                     Thread.sleep(1500)
 
                     val launchIntent =
@@ -255,7 +375,7 @@ class InterventionService : NotificationListenerService() {
                         startActivity(it)
                     }
 
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     // Ne jamais bloquer l'alerte principale.
                 }
 
@@ -266,7 +386,6 @@ class InterventionService : NotificationListenerService() {
             }
 
         } finally {
-
             if (wakeLock.isHeld) {
                 wakeLock.release()
             }
@@ -281,7 +400,6 @@ class InterventionService : NotificationListenerService() {
         sbn: StatusBarNotification
     ) {
         super.onNotificationRemoved(sbn)
-
         processedNotifications.remove(sbn.key)
     }
 }
