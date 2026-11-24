@@ -30,7 +30,7 @@ class InterventionPage extends StatefulWidget {
   State<InterventionPage> createState() => _InterventionPageState();
 }
 
-class _InterventionPageState extends State<InterventionPage> {
+class _InterventionPageState extends State<InterventionPage> with WidgetsBindingObserver {
   final FlutterTts _tts = FlutterTts();
   final AudioPlayer _audio = AudioPlayer();
   static const platform = MethodChannel('com.tomtom.intervention/notify');
@@ -46,6 +46,7 @@ class _InterventionPageState extends State<InterventionPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initTTS();
     _configureAudioForCar();
     _loadData();
@@ -88,19 +89,34 @@ class _InterventionPageState extends State<InterventionPage> {
     ));
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadData();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    if (!mounted) return;
     setState(() {
       _monitoredApps = Map<String, String>.from(json.decode(prefs.getString('apps') ?? '{}'));
       _rules = (json.decode(prefs.getString('rules') ?? '[]') as List)
           .map((e) => Map<String, String>.from(e))
           .toList();
       _ignoreWords = prefs.getStringList('ignore_words') ?? [];
-      _logs = prefs.getStringList('logs') ?? [];
+      _logs = [...(jsonDecode(prefs.getString('native_logs') ?? '[]') as List).cast<String>(), ...?prefs.getStringList('logs')].toSet().toList()..sort((a,b) => b.compareTo(a));
+      if (_logs.length > 200) _logs = _logs.sublist(0, 200);
       _customSounds = prefs.getStringList('custom_sounds') ?? [];
       _appSounds = Map<String, String>.from(json.decode(prefs.getString('app_sounds') ?? '{}'));
       _orbeWatchName = prefs.getString('orbe_watch_name') ?? 'CALABRO';
     });
+    await prefs.setString('native_ignore_words', jsonEncode(_ignoreWords));
   }
 
   Future<void> _saveData() async {
@@ -108,6 +124,7 @@ class _InterventionPageState extends State<InterventionPage> {
     await prefs.setString('apps', json.encode(_monitoredApps));
     await prefs.setString('rules', json.encode(_rules));
     await prefs.setStringList('ignore_words', _ignoreWords);
+    await prefs.setString('native_ignore_words', jsonEncode(_ignoreWords));
     await prefs.setString('selected_packages', _monitoredApps.keys.join(','));
     await prefs.setStringList('logs', _logs);
     await prefs.setStringList('custom_sounds', _customSounds);
@@ -192,7 +209,10 @@ class _InterventionPageState extends State<InterventionPage> {
     _saveData();
   }
 
-  void _clearLogs() {
+  void _clearLogs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('native_logs');
+    if (!mounted) return;
     setState(() => _logs.clear());
     _saveData();
   }
@@ -318,7 +338,7 @@ class _InterventionPageState extends State<InterventionPage> {
         for (int i = 0; i < 4; i++)
           ListTile(title: Text(["Accueil", "Règles", "Réglages", "Journal"][i]),
             selected: _page == i,
-            onTap: () { setState(() => _page = i); Navigator.pop(context); }),
+            onTap: () { setState(() => _page = i); Navigator.pop(context); if (i == 3) _loadData(); }),
       ]))),
       body: _page == 1 ? _buildRulesTab() : _page == 2 ? _buildSettingsTab() :
         _page == 3 ? _buildLogsTab() : const Center(child: Text("Surveillance des notifications")),
