@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -310,26 +311,23 @@ class _InterventionPageState extends State<InterventionPage> {
   // --- INTERFACE ---
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text("INTERVENTION", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-          backgroundColor: Colors.black,
-          bottom: const TabBar(
-            indicatorColor: Colors.redAccent,
-            tabs: [Tab(text: "RÈGLES"), Tab(text: "RÉGLAGES"), Tab(text: "JOURNAL")],
-          ),
-        ),
-        body: TabBarView(children: [_buildRulesTab(), _buildSettingsTab(), _buildLogsTab()]),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => _showRuleDialog(),
-          backgroundColor: Colors.redAccent,
-          child: const Icon(Icons.add, color: Colors.white),
-        ),
-      ),
+    return Scaffold(
+      appBar: AppBar(title: const Text("INTERVENTION", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold))),
+      drawer: Drawer(child: SafeArea(child: ListView(children: [
+        const DrawerHeader(child: Text("INTERVENTION")),
+        for (int i = 0; i < 4; i++)
+          ListTile(title: Text(["Accueil", "Règles", "Réglages", "Journal"][i]),
+            selected: _page == i,
+            onTap: () { setState(() => _page = i); Navigator.pop(context); }),
+      ]))),
+      body: _page == 1 ? _buildRulesTab() : _page == 2 ? _buildSettingsTab() :
+        _page == 3 ? _buildLogsTab() : const Center(child: Text("Surveillance des notifications")),
+      floatingActionButton: _page == 1 ? FloatingActionButton(
+        onPressed: () => _showRuleDialog(), child: const Icon(Icons.add)) : null,
     );
   }
+
+  int _page = 0;
 
   Widget _buildRulesTab() {
     return ListView.builder(
@@ -508,30 +506,91 @@ class _InterventionPageState extends State<InterventionPage> {
     );
   }
 
-  void _exportRules() {
-    Clipboard.setData(ClipboardData(text: json.encode(_rules)));
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Règles copiées !")));
+  Future<void> _exportRules() async {
+    try {
+      final dir = await _soundsDir();
+      final sounds = <Map<String, String>>[];
+      for (final name in _customSounds) {
+        final file = File('${dir.path}/$name');
+        if (await file.exists()) {
+          sounds.add({'name': name, 'data': base64Encode(await file.readAsBytes())});
+        }
+      }
+      final data = jsonEncode({
+        'version': 2, 'rules': _rules, 'monitoredApps': _monitoredApps,
+        'appSounds': _appSounds, 'ignoreWords': _ignoreWords,
+        'orbeWatchName': _orbeWatchName, 'customSounds': sounds,
+      });
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Exporter la sauvegarde',
+        fileName: 'intervention_backup.json',
+        bytes: Uint8List.fromList(utf8.encode(data)),
+      );
+      if (path != null) _addLog("Sauvegarde exportée");
+    } catch (e) { _addLog("Erreur export : $e"); }
   }
 
-  void _importRules() {
-    TextEditingController controller = TextEditingController();
-    showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("Importer JSON"),
-      content: TextField(controller: controller, maxLines: 5, decoration: const InputDecoration(hintText: "Collez ici")),
-      actions: [ElevatedButton(onPressed: () {
-        try {
-          setState(() {
-            _rules = (json.decode(controller.text) as List)
-                .map((e) => Map<String, String>.from(e))
-                .toList();
-          });
-          _saveData();
-          Navigator.pop(ctx);
-        } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Format invalide")));
+  Future<void> _restoreJson(String text) async {
+    final decoded = jsonDecode(text);
+    final full = decoded is Map;
+    final rules = ((full ? decoded['rules'] : decoded) as List)
+      .map((e) => Map<String, String>.from(e as Map)).toList();
+    if (rules.any((r) => !r.containsKey('if') || !r.containsKey('say') || !r.containsKey('sound'))) {
+      throw const FormatException('Règle invalide');
+    }
+    final apps = full ? Map<String, String>.from(decoded['monitoredApps'] as Map) : _monitoredApps;
+    final appSounds = full ? Map<String, String>.from(decoded['appSounds'] as Map) : _appSounds;
+    final ignored = full ? List<String>.from(decoded['ignoreWords'] as List) : _ignoreWords;
+    final watch = full ? decoded['orbeWatchName'] as String : _orbeWatchName;
+    final sounds = <String, List<int>>{};
+    if (full) {
+      for (final item in (decoded['customSounds'] as List? ?? [])) {
+        final name = item['name'] as String;
+        if (name.isEmpty || name.contains('/') || name.contains('\\') || name == '.' || name == '..') {
+          throw const FormatException('Nom de son invalide');
         }
-      }, child: const Text("OK"))],
+        sounds[name] = base64Decode(item['data'] as String);
+      }
+      final dir = await _soundsDir();
+      for (final entry in sounds.entries) {
+        await File('${dir.path}/${entry.key}').writeAsBytes(entry.value);
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _rules = rules; _monitoredApps = apps; _appSounds = appSounds;
+      _ignoreWords = ignored; _orbeWatchName = watch;
+      if (full) _customSounds = {..._customSounds, ...sounds.keys}.toList();
+    });
+    await _saveData();
+    _addLog("Import JSON réussi : ${rules.length} règles");
+  }
+
+  Future<void> _importRules() async {
+    final mode = await showDialog<String>(context: context, builder: (ctx) => SimpleDialog(
+      title: const Text("Importer JSON"),
+      children: [
+        SimpleDialogOption(onPressed: () => Navigator.pop(ctx, 'file'), child: const Text("Choisir un fichier JSON")),
+        SimpleDialogOption(onPressed: () => Navigator.pop(ctx, 'text'), child: const Text("Coller du texte")),
+      ],
     ));
+    try {
+      if (mode == 'file') {
+        final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json'], withData: true);
+        if (result == null) return;
+        final file = result.files.single;
+        await _restoreJson(utf8.decode(file.bytes ?? await File(file.path!).readAsBytes()));
+      } else if (mode == 'text' && mounted) {
+        final controller = TextEditingController();
+        final value = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+          title: const Text("Coller le JSON"),
+          content: TextField(controller: controller, maxLines: 5),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text("OK"))],
+        ));
+        controller.dispose();
+        if (value != null) await _restoreJson(value);
+      }
+    } catch (e) { _addLog("Erreur import JSON : $e"); }
   }
 
   void _showOrbeWatchNameDialog() {
