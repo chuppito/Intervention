@@ -4,7 +4,7 @@ description: "Application de surveillance des alertes départ secours."
 # Empêche la publication accidentelle sur pub.dev
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -31,7 +31,7 @@ dependencies:
   external_app_launcher: ^4.0.3
 
   # Pour parcourir les documents et choisir un son personnalisé
-  file_picker: ^8.1.2
+  file_picker: ^10.3.10
 
   # Pour copier le son choisi dans un dossier stable de l'app
   path_provider: ^2.1.4
